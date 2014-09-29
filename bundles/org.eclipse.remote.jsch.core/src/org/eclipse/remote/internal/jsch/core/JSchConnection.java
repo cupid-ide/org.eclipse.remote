@@ -790,6 +790,7 @@ public class JSchConnection implements IRemoteConnection {
 			Session session = fJSchService.createSession(getAddress(), getPort(), getUsername());
 			session.setUserInfo(new JSchUserInfo(authenticator));
 			if (isPasswordAuth()) {
+				session.setConfig("PreferredAuthentications","password,keyboard-interactive"); //$NON-NLS-1$ //$NON-NLS-2$
 				session.setPassword(getPassword());
 			}
 			fJSchService.connect(session, getTimeout() * 1000, progress.newChild(10));
