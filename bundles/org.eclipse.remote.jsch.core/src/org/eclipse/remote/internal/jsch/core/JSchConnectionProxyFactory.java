@@ -31,6 +31,7 @@ import org.eclipse.remote.core.exception.RemoteConnectionException;
 import org.eclipse.remote.internal.jsch.core.messages.Messages;
 
 import com.jcraft.jsch.Channel;
+import com.jcraft.jsch.ChannelExec;
 import com.jcraft.jsch.Proxy;
 import com.jcraft.jsch.SocketFactory;
 
@@ -77,26 +78,42 @@ public class JSchConnectionProxyFactory {
 			}
 			final int waitTime = 50;
 			final int waitSteps = timeout / waitTime;
-			SubMonitor subMon;
+			SubMonitor subMon = SubMonitor.convert(monitor, waitSteps * 2);
+			final SubMonitor childMon = subMon.newChild(waitSteps);
 
 			// Open connection if it isn't already opened
-			if (!connection.isOpen()) {
-				subMon = SubMonitor.convert(monitor, waitSteps * 2);
-				try {
-					connection.open(subMon.newChild(waitSteps));
-				} catch (RemoteConnectionException e) {
-					throw new IOException(e);
+			try {
+				if (connection instanceof JSchConnection) {
+					((JSchConnection) connection).open(childMon, false);
+				} else {
+					if (!connection.isOpen()) {
+						connection.open(childMon);
+					}
 				}
-			} else {
-				subMon = SubMonitor.convert(monitor, waitSteps);
+			} catch (RemoteConnectionException e) {
+				throw new IOException(e);
 			}
+			childMon.done();
 
 			// Start command
 			command = command.replace("%h", host); //$NON-NLS-1$
 			command = command.replace("%p", Integer.toString(port)); //$NON-NLS-1$
-			List<String> cmd = new ArgumentParser(command).getTokenList();
-			IRemoteProcessBuilder pb = connection.getProcessBuilder(cmd);
-			process = pb.start();
+
+			if (connection instanceof JSchConnection) {
+				// The process-builder adds unnecessary extra commands (cd, export, ..) and might not work for restricted shells
+				try {
+					ChannelExec exec = ((JSchConnection) connection).getExecChannel();
+					exec.setCommand(command);
+					exec.connect();
+					process = new JSchProcess(exec, false);
+				} catch (Exception e) {
+					throw new IOException(e);
+				}
+			} else {
+				List<String> cmd = new ArgumentParser(command).getTokenList();
+				IRemoteProcessBuilder pb = connection.getProcessBuilder(cmd);
+				process = pb.start();
+			}
 
 			// Wait on command to produce stdout output
 			long endTime = System.currentTimeMillis() + timeout;
@@ -209,9 +226,9 @@ public class JSchConnectionProxyFactory {
 		@Override
 		public void connect(SocketFactory socket_factory, String host, int port,
 				int timeout) throws Exception {
-			if (!connection.isOpen()) {
+			if (!connection.hasOpenSession()) {
 				try {
-					connection.open(monitor);
+					connection.open(monitor, false);
 				} catch (RemoteConnectionException e) {
 					throw new IOException(e);
 				}

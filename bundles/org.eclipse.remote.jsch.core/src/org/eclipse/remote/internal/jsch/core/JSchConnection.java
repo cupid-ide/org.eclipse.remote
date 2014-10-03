@@ -186,6 +186,7 @@ public class JSchConnection implements IRemoteConnection {
 	private final List<Session> fSessions = new ArrayList<Session>();
 
 	private ChannelSftp fSftpChannel;
+	private boolean isFullySetup;
 
 	public JSchConnection(String name, IRemoteServices services) {
 		fRemoteServices = services;
@@ -703,13 +704,12 @@ public class JSchConnection implements IRemoteConnection {
 		return fWorkingDir;
 	}
 
-	/*
-	 * (non-Javadoc)
-	 *
-	 * @see org.eclipse.remote.core.IRemoteConnection#isOpen()
+	/**
+	 * Test if the connection has a valid open session. Doesn't check whether the connection is fully setup.
+	 * 
+	 * @return returns true if a valid session is available.
 	 */
-	@Override
-	public boolean isOpen() {
+	public boolean hasOpenSession() {
 		boolean isOpen = fSessions.size() > 0;
 		if (isOpen) {
 			for (Session session : fSessions) {
@@ -720,6 +720,16 @@ public class JSchConnection implements IRemoteConnection {
 			close(); // Cleanup if session is closed
 		}
 		return isOpen;
+	}
+
+	/*
+	 * (non-Javadoc)
+	 *
+	 * @see org.eclipse.remote.core.IRemoteConnection#isOpen()
+	 */
+	@Override
+	public boolean isOpen() {
+		return hasOpenSession() && isFullySetup;
 	}
 
 	public boolean isPasswordAuth() {
@@ -873,16 +883,32 @@ public class JSchConnection implements IRemoteConnection {
 	 */
 	@Override
 	public void open(IProgressMonitor monitor) throws RemoteConnectionException {
-		if (!isOpen()) {
+		open(monitor, true);
+	}
+
+	/**
+	 * @see org.eclipse.remote.core.IRemoteConnection#open()
+	 *
+	 * @param monitor
+	 * @param setupFully
+	 *            open a full featured connection (environment query and sftp)
+	 * @throws RemoteConnectionException
+	 */
+	public void open(IProgressMonitor monitor, boolean setupFully) throws RemoteConnectionException {
+		SubMonitor subMon = SubMonitor.convert(monitor, 60);
+		if (!hasOpenSession()) {
 			checkIsConfigured();
-			SubMonitor subMon = SubMonitor.convert(monitor, 60);
-			Session session = newSession(fManager.getUserAuthenticator(this), subMon.newChild(10));
+			newSession(fManager.getUserAuthenticator(this), subMon.newChild(10));
 			if (subMon.isCanceled()) {
 				throw new RemoteConnectionException(Messages.JSchConnection_Connection_was_cancelled);
 			}
+			isFullySetup = false;
+		}
+		if (setupFully && !isFullySetup) { // happens on the first open with setupFully==true, which might not be the first open
+			isFullySetup = true;
 			// getCwd checks the exec channel before checkConfiguration checks the sftp channel
 			fWorkingDir = getCwd(subMon.newChild(10));
-			if (!checkConfiguration(session, subMon.newChild(20))) {
+			if (!checkConfiguration(fSessions.get(0), subMon.newChild(20))) {
 				newSession(fManager.getUserAuthenticator(this), subMon.newChild(10));
 				loadEnv(subMon.newChild(10));
 			}
